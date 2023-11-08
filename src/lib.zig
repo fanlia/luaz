@@ -109,6 +109,10 @@ const Reader = struct {
     fn readLuaInteger(self: *Reader) i64 {
         return @as(i64, @intCast(self.readUint64()));
     }
+
+    fn readLuaNumber(self: *Reader) f64 {
+        return @as(f64, @bitCast(self.readUint64()));
+    }
 };
 
 test "Reader readByte" {
@@ -137,4 +141,11 @@ test "Reader readLuaInteger" {
     var reader = Reader{ .data = &data };
     const i = reader.readLuaInteger();
     try expect(i == 0x5678);
+}
+
+test "Reader readLuaNumber" {
+    const data = [_]u8{ 0, 0, 0, 0, 0, 0x28, 0x77, 0x40 };
+    var reader = Reader{ .data = &data };
+    const f = reader.readLuaNumber();
+    try expect(f == 370.5);
 }
