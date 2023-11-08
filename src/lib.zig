@@ -7,7 +7,7 @@ pub const name = "luaz";
 const LUA_SIGNATURE = "\x1bLua";
 const LUAC_VERSION = 0x53;
 const LUAC_FORMAT = 0;
-const LUAC_DATA = "\x19\x93\r\rn\x1a\n";
+const LUAC_DATA = "\x19\x93\r\n\x1a\n";
 const CINT_SIZE = 4;
 const CSIZET_SIZE = 8;
 const INSTURCTION_SIZE = 4;
@@ -81,7 +81,6 @@ const LocVar = struct {
 
 const Reader = struct {
     data: []const u8,
-    alloc: std.mem.Allocator,
 
     fn readByte(self: *Reader) u8 {
         const b = self.data[0];
@@ -90,13 +89,13 @@ const Reader = struct {
     }
 
     fn readUint32(self: *Reader) u32 {
-        const i = std.mem.readVarInt(u32, self.data, .Little);
+        const i = std.mem.readVarInt(u32, self.data[0..4], .Little);
         self.data = self.data[4..];
         return i;
     }
 
     fn readUint64(self: *Reader) u64 {
-        const i = std.mem.readVarInt(u64, self.data, .Little);
+        const i = std.mem.readVarInt(u64, self.data[0..8], .Little);
         self.data = self.data[8..];
         return i;
     }
@@ -152,32 +151,32 @@ const Reader = struct {
         }
     }
 
-    fn readProto(self: *Reader, parentSource: []const u8) error{OutOfMemory}!*Prototype {
+    fn readProto(self: *Reader, parentSource: []const u8, alloc: std.mem.Allocator) error{OutOfMemory}!*Prototype {
         var source = self.readString();
         if (eql(u8, source, "")) {
             source = parentSource;
         }
 
-        var proto = try self.alloc.create(Prototype);
+        var proto = try alloc.create(Prototype);
         proto.source = source;
         proto.lineDefined = self.readUint32();
         proto.lastLineDefined = self.readUint32();
         proto.numParams = self.readByte();
         proto.isVararg = self.readByte();
         proto.maxStackSize = self.readByte();
-        proto.code = try self.readCode();
-        proto.constants = try self.readConstants();
-        proto.upvalues = try self.readUpvalues();
-        proto.protos = try self.readProtos(source);
-        proto.lineInfo = try self.readLineInfo();
-        proto.locVars = try self.readLocVars();
-        proto.upvalueNames = try self.readUpvalueNames();
+        proto.code = try self.readCode(alloc);
+        proto.constants = try self.readConstants(alloc);
+        proto.upvalues = try self.readUpvalues(alloc);
+        proto.protos = try self.readProtos(source, alloc);
+        proto.lineInfo = try self.readLineInfo(alloc);
+        proto.locVars = try self.readLocVars(alloc);
+        proto.upvalueNames = try self.readUpvalueNames(alloc);
 
         return proto;
     }
 
-    fn readCode(self: *Reader) ![]u32 {
-        var code = try self.alloc.alloc(u32, self.readUint32());
+    fn readCode(self: *Reader, alloc: std.mem.Allocator) ![]u32 {
+        var code = try alloc.alloc(u32, self.readUint32());
         for (0..code.len) |i| {
             code[i] = self.readUint32();
         }
@@ -185,8 +184,8 @@ const Reader = struct {
         return code;
     }
 
-    fn readConstants(self: *Reader) ![]Constant {
-        var constants = try self.alloc.alloc(Constant, self.readUint32());
+    fn readConstants(self: *Reader, alloc: std.mem.Allocator) ![]Constant {
+        var constants = try alloc.alloc(Constant, self.readUint32());
         for (0..constants.len) |i| {
             constants[i] = self.readConstant();
         }
@@ -196,7 +195,7 @@ const Reader = struct {
 
     fn readConstant(self: *Reader) Constant {
         return switch (self.readByte()) {
-            // TAG_NIL => Constant{.nil},
+            TAG_NIL => Constant{ .nil = {} },
             TAG_BOOLEAN => Constant{ .boolean = (self.readByte() != 0) },
             TAG_INTEGER => Constant{ .integer = self.readLuaInteger() },
             TAG_NUMBER => Constant{ .number = self.readLuaNumber() },
@@ -206,8 +205,8 @@ const Reader = struct {
         };
     }
 
-    fn readUpvalues(self: *Reader) ![]Upvalue {
-        var upvalues = try self.alloc.alloc(Upvalue, self.readUint32());
+    fn readUpvalues(self: *Reader, alloc: std.mem.Allocator) ![]Upvalue {
+        var upvalues = try alloc.alloc(Upvalue, self.readUint32());
         for (0..upvalues.len) |i| {
             upvalues[i] = Upvalue{
                 .instack = self.readByte(),
@@ -218,17 +217,17 @@ const Reader = struct {
         return upvalues;
     }
 
-    fn readProtos(self: *Reader, parentSource: []const u8) ![]*Prototype {
-        var protos = try self.alloc.alloc(*Prototype, self.readUint32());
+    fn readProtos(self: *Reader, parentSource: []const u8, alloc: std.mem.Allocator) ![]*Prototype {
+        var protos = try alloc.alloc(*Prototype, self.readUint32());
         for (0..protos.len) |i| {
-            protos[i] = try self.readProto(parentSource);
+            protos[i] = try self.readProto(parentSource, alloc);
         }
 
         return protos;
     }
 
-    fn readLineInfo(self: *Reader) ![]u32 {
-        var lineInfo = try self.alloc.alloc(u32, self.readUint32());
+    fn readLineInfo(self: *Reader, alloc: std.mem.Allocator) ![]u32 {
+        var lineInfo = try alloc.alloc(u32, self.readUint32());
         for (0..lineInfo.len) |i| {
             lineInfo[i] = self.readUint32();
         }
@@ -236,8 +235,8 @@ const Reader = struct {
         return lineInfo;
     }
 
-    fn readLocVars(self: *Reader) ![]LocVar {
-        var locVars = try self.alloc.alloc(LocVar, self.readUint32());
+    fn readLocVars(self: *Reader, alloc: std.mem.Allocator) ![]LocVar {
+        var locVars = try alloc.alloc(LocVar, self.readUint32());
         for (0..locVars.len) |i| {
             locVars[i] = LocVar{
                 .varName = self.readString(),
@@ -249,8 +248,8 @@ const Reader = struct {
         return locVars;
     }
 
-    fn readUpvalueNames(self: *Reader) ![][]const u8 {
-        var upvalueNames = try self.alloc.alloc([]const u8, self.readUint32());
+    fn readUpvalueNames(self: *Reader, alloc: std.mem.Allocator) ![][]const u8 {
+        var upvalueNames = try alloc.alloc([]const u8, self.readUint32());
         for (0..upvalueNames.len) |i| {
             upvalueNames[i] = self.readString();
         }
@@ -260,10 +259,10 @@ const Reader = struct {
 };
 
 pub fn undump(data: []const u8, alloc: std.mem.Allocator) !*Prototype {
-    var reader = Reader{ .data = data, .alloc = alloc };
+    var reader = Reader{ .data = data };
     try reader.checkHeader();
     _ = reader.readByte();
-    return reader.readProto("");
+    return reader.readProto("", alloc);
 }
 
 test "Reader readByte" {
