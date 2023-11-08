@@ -1,5 +1,6 @@
 const std = @import("std");
 const expect = std.testing.expect;
+const eql = std.mem.eql;
 
 pub const name = "luaz";
 
@@ -113,6 +114,23 @@ const Reader = struct {
     fn readLuaNumber(self: *Reader) f64 {
         return @as(f64, @bitCast(self.readUint64()));
     }
+
+    fn readString(self: *Reader) []const u8 {
+        var size = @as(usize, @intCast(self.readByte()));
+        if (size == 0) {
+            return "";
+        }
+        if (size == 0xFF) {
+            size = @as(usize, @intCast(self.readUint64()));
+        }
+        return self.readBytes(size - 1);
+    }
+
+    fn readBytes(self: *Reader, n: usize) []const u8 {
+        const bytes = self.data[0..n];
+        self.data = self.data[n..];
+        return bytes;
+    }
 };
 
 test "Reader readByte" {
@@ -148,4 +166,18 @@ test "Reader readLuaNumber" {
     var reader = Reader{ .data = &data };
     const f = reader.readLuaNumber();
     try expect(f == 370.5);
+}
+
+test "Reader readString" {
+    const data = [_]u8{ 0x06, 0x70, 0x72, 0x69, 0x6E, 0x74 };
+    var reader = Reader{ .data = &data };
+    const bytes = reader.readString();
+    try expect(eql(u8, bytes, "print"));
+}
+
+test "Reader readBytes" {
+    const data = [_]u8{ 1, 2, 3, 4 };
+    var reader = Reader{ .data = &data };
+    const bytes = reader.readBytes(2);
+    try expect(eql(u8, bytes, &[_]u8{ 1, 2 }));
 }
