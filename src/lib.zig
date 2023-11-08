@@ -58,9 +58,9 @@ const Prototype = struct {
     locVars: []LocVar,
     upvalueNames: [][]const u8,
 
-    fn undump(data: []const u8) *Prototype {
-        var reader = Reader{ .data = data };
-        reader.checkHeader();
+    fn undump(data: []const u8, alloc: std.mem.Allocator) !*Prototype {
+        var reader = Reader{ .data = data, .alloc = alloc };
+        try reader.checkHeader();
         reader.readByte();
         return reader.readProto("");
     }
@@ -88,6 +88,7 @@ const LocVar = struct {
 
 const Reader = struct {
     data: []const u8,
+    alloc: std.mem.Allocator,
 
     fn readByte(self: *Reader) u8 {
         const b = self.data[0];
@@ -130,6 +131,65 @@ const Reader = struct {
         const bytes = self.data[0..n];
         self.data = self.data[n..];
         return bytes;
+    }
+
+    fn checkHeader(self: *Reader) !void {
+        if (!eql(u8, self.readBytes(4), LUA_SIGNATURE)) {
+            return error.NotAPrecompiledChunk;
+        } else if (self.readByte() != LUAC_VERSION) {
+            return error.VersionMismatch;
+        } else if (self.readByte() != LUAC_FORMAT) {
+            return error.FormatMismatch;
+        } else if (!eql(u8, self.readBytes(6), LUAC_DATA)) {
+            return error.Corrupted;
+        } else if (self.readByte() != CINT_SIZE) {
+            return error.IntSizeMismatch;
+        } else if (self.readByte() != CSIZET_SIZE) {
+            return error.SizetSizeMismatch;
+        } else if (self.readByte() != INSTURCTION_SIZE) {
+            return error.InstructionSizeMismatch;
+        } else if (self.readByte() != LUA_INTEGER_SIZE) {
+            return error.LuaIntegerSizeMismatch;
+        } else if (self.readByte() != LUA_NUMBER_SIZE) {
+            return error.LuaNumberSizeMismatch;
+        } else if (self.readLuaInteger() != LUAC_INT) {
+            return error.EndiannessMismatch;
+        } else if (self.readLuaNumber() != LUAC_NUM) {
+            return error.FloatFormatMismatch;
+        }
+    }
+
+    fn readProto(self: *Reader, parentSource: []const u8) *Prototype {
+        var source = self.readString();
+        if (eql(u8, source, "")) {
+            source = parentSource;
+        }
+
+        var proto = self.alloc.create(Prototype);
+        proto.source = source;
+        proto.lineDefined = self.readUint32();
+        proto.lastLineDefined = self.readUint32();
+        proto.numParams = self.readByte();
+        proto.isVararg = self.readByte();
+        proto.maxStackSize = self.readByte();
+        proto.code = self.readCode();
+        proto.constants = self.readConstants();
+        proto.upvalues = self.readUpvalues();
+        proto.protos = self.readProtos(source);
+        proto.lineInfo = self.readLineInfo();
+        proto.locVars = self.readLocVars();
+        proto.upvalueNames = self.readUpvalueNames();
+
+        return proto;
+    }
+
+    fn readCode(self: *Reader) []u32 {
+        var code = std.ArrayList(u32).initCapacity(self.alloc, self.readUint32());
+        for (0..code.len) |i| {
+            code[i] = self.readUint32();
+        }
+
+        return code;
     }
 };
 
