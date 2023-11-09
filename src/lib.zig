@@ -487,3 +487,338 @@ var opcodes = [_]OpCode{
     OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgU, .argCMode = .OpArgN, .opMode = .IABC, .name = "VARARG  " },
     OpCode{ .testFlag = false, .setAflag = false, .argBMode = .OpArgU, .argCMode = .OpArgU, .opMode = .IAx, .name = "EXTRAARG" },
 };
+
+const LuaType = enum(i8) {
+    LUA_TNONE = -1,
+    LUA_TNIL,
+    LUA_TBOOLEAN,
+    LUA_TLIGHTUSERDATA,
+    LUA_TNUMBER,
+    LUA_TSTRING,
+    LUA_TTABLE,
+    LUA_TFUNCTION,
+    LUA_TUSERDATA,
+    LUA_TTHREAD,
+};
+
+pub const LuaValue = union(enum) {
+    nil,
+    boolean: bool,
+    integer: i64,
+    number: f64,
+    string: []const u8,
+};
+
+fn typeOf(val: LuaValue) LuaType {
+    return switch (val) {
+        .nil => .LUA_TNIL,
+        .boolean => .LUA_TBOOLEAN,
+        .integer => .LUA_TNUMBER,
+        .number => .LUA_TNUMBER,
+        .string => .LUA_TSTRING,
+    };
+}
+
+const LuaStack = struct {
+    slots: std.ArrayList(LuaValue),
+    top: usize,
+
+    fn new(size: usize, alloc: std.mem.Allocator) !*LuaStack {
+        var stack = try alloc.create(LuaStack);
+        var slots = try std.ArrayList(LuaValue).initCapacity(alloc, size);
+        stack.slots = slots;
+        stack.top = 0;
+        return stack;
+    }
+
+    fn check(self: *LuaStack, n: usize) !void {
+        const free = self.slots.items.len - self.top;
+        var i = free;
+        while (i < n) : (i += 1) {
+            try self.slots.append(LuaValue{ .nil = {} });
+        }
+    }
+
+    fn push(self: *LuaStack, val: LuaValue) !void {
+        if (self.top == self.slots.capacity) {
+            return error.StackOverflow;
+        }
+        try self.slots.append(val);
+        self.top += 1;
+    }
+
+    fn pop(self: *LuaStack) !LuaValue {
+        if (self.top < 1) {
+            return error.StackUnderflow;
+        }
+        self.top -= 1;
+        const val = self.slots.items[self.top];
+        self.slots.items[self.top] = LuaValue{ .nil = {} };
+        return val;
+    }
+
+    fn absIndex(self: *LuaStack, idx: isize) usize {
+        if (idx >= 0) {
+            return @as(usize, @intCast(idx));
+        }
+        return @as(usize, @intCast(idx + @as(isize, @intCast(self.top)) + 1));
+    }
+
+    fn isValid(self: *LuaStack, idx: isize) bool {
+        const absIdx = self.absIndex(idx);
+        return absIdx > 0 and absIdx <= self.top;
+    }
+
+    fn get(self: *LuaStack, idx: isize) LuaValue {
+        const absIdx = self.absIndex(idx);
+        if (absIdx > 0 and absIdx <= self.top) {
+            return self.slots.items[absIdx - 1];
+        }
+        return LuaValue{ .nil = {} };
+    }
+
+    fn set(self: *LuaStack, idx: isize, val: LuaValue) !void {
+        const absIdx = self.absIndex(idx);
+        if (absIdx > 0 and absIdx <= self.top) {
+            self.slots.items[absIdx - 1] = val;
+            return;
+        }
+        return error.InvalidIndex;
+    }
+
+    fn reverse(self: *LuaStack, start: usize, end: usize) void {
+        var from = start;
+        var to = end;
+        while (from < to) {
+            const tmp = self.slots.items[from];
+            self.slots.items[from] = self.slots.items[to];
+            self.slots.items[to] = tmp;
+            from += 1;
+            to -= 1;
+        }
+    }
+};
+
+pub const LuaState = struct {
+    stack: *LuaStack,
+    alloc: std.mem.Allocator,
+
+    pub fn new(alloc: std.mem.Allocator) !*LuaState {
+        var state = try alloc.create(LuaState);
+        var stack = try LuaStack.new(20, alloc);
+        state.stack = stack;
+        state.alloc = alloc;
+        return state;
+    }
+
+    pub fn getTop(self: *LuaState) usize {
+        return self.stack.top;
+    }
+
+    pub fn absIndex(self: *LuaState, idx: isize) usize {
+        return self.stack.absIndex(idx);
+    }
+
+    pub fn checkStack(self: *LuaState, n: usize) bool {
+        self.stack.check(n) catch return false;
+        return true;
+    }
+
+    pub fn pop(self: *LuaState, n: isize) !void {
+        try self.setTop(-n - 1);
+    }
+
+    pub fn copy(self: *LuaState, fromIdx: isize, toIdx: isize) !void {
+        const val = self.stack.get(fromIdx);
+        try self.stack.set(toIdx, val);
+    }
+
+    pub fn pushValue(self: *LuaState, idx: isize) !void {
+        const val = self.stack.get(idx);
+        try self.stack.push(val);
+    }
+
+    pub fn replace(self: *LuaState, idx: isize) !void {
+        const val = try self.stack.pop();
+        try self.stack.set(idx, val);
+    }
+
+    pub fn insert(self: *LuaState, idx: isize) void {
+        self.rotate(idx, 1);
+    }
+
+    pub fn remove(self: *LuaState, idx: isize) !void {
+        self.rotate(idx, -1);
+        try self.pop(1);
+    }
+
+    pub fn rotate(self: *LuaState, idx: isize, n: isize) void {
+        const t = self.stack.top - 1;
+        const p = self.stack.absIndex(idx) - 1;
+
+        var m = if (n >= 0) t - @as(usize, @intCast(n)) else p + @as(usize, @intCast(-n)) - 1;
+        self.stack.reverse(p, m);
+        self.stack.reverse(m + 1, t);
+        self.stack.reverse(p, t);
+    }
+
+    pub fn setTop(self: *LuaState, idx: isize) !void {
+        const newTop = self.stack.absIndex(idx);
+        if (newTop < 0) {
+            return error.StackUnderflow;
+        }
+        var n = @as(isize, @intCast(self.stack.top)) - @as(isize, @intCast(newTop));
+        if (n > 0) {
+            var i: isize = 0;
+            while (i < n) : (i += 1) {
+                _ = try self.stack.pop();
+            }
+        } else if (n < 0) {
+            var i: isize = 0;
+            while (i > n) : (i -= 1) {
+                try self.stack.push(LuaValue{ .nil = {} });
+            }
+        }
+    }
+
+    pub fn pushNil(self: *LuaState) !void {
+        try self.stack.push(LuaValue{ .nil = {} });
+    }
+
+    pub fn pushBoolean(self: *LuaState, b: bool) !void {
+        try self.stack.push(LuaValue{ .boolean = b });
+    }
+
+    pub fn pushInteger(self: *LuaState, n: i64) !void {
+        try self.stack.push(LuaValue{ .integer = n });
+    }
+
+    pub fn pushNumber(self: *LuaState, n: f64) !void {
+        try self.stack.push(LuaValue{ .number = n });
+    }
+
+    pub fn pushString(self: *LuaState, s: []const u8) !void {
+        try self.stack.push(LuaValue{ .string = s });
+    }
+
+    pub fn typeName(self: *LuaState, tp: LuaType) []const u8 {
+        _ = self;
+        return switch (tp) {
+            .LUA_TNONE => "no value",
+            .LUA_TNIL => "nil",
+            .LUA_TBOOLEAN => "boolean",
+            .LUA_TLIGHTUSERDATA => "userdata",
+            .LUA_TNUMBER => "number",
+            .LUA_TSTRING => "string",
+            .LUA_TTABLE => "table",
+            .LUA_TFUNCTION => "function",
+            .LUA_TUSERDATA => "thread",
+            .LUA_TTHREAD => "userdata",
+        };
+    }
+
+    pub fn getType(self: *LuaState, idx: isize) LuaType {
+        if (self.stack.isValid(idx)) {
+            const val = self.stack.get(idx);
+            return typeOf(val);
+        }
+
+        return .LUA_TNONE;
+    }
+
+    pub fn isNone(self: *LuaState, idx: isize) bool {
+        return self.getType(idx) == .LUA_TNONE;
+    }
+
+    pub fn isNil(self: *LuaState, idx: isize) bool {
+        return self.getType(idx) == .LUA_TNIL;
+    }
+
+    pub fn isNoneOrNil(self: *LuaState, idx: isize) bool {
+        const t = self.getType(idx);
+        return t == .LUA_TNONE or t == .LUA_TNIL;
+    }
+
+    pub fn isBoolean(self: *LuaState, idx: isize) bool {
+        return self.getType(idx) == .LUA_TBOOLEAN;
+    }
+
+    pub fn isString(self: *LuaState, idx: isize) bool {
+        const t = self.getType(idx);
+        return t == .LUA_TSTRING or t == .LUA_TNUMBER;
+    }
+
+    pub fn isNumber(self: *LuaState, idx: isize) bool {
+        const result = self.toNumberX(idx);
+        return result[1];
+    }
+
+    pub fn isInteger(self: *LuaState, idx: isize) bool {
+        const val = self.stack.get(idx);
+        return switch (val) {
+            .integer => true,
+            else => false,
+        };
+    }
+
+    pub fn toBoolean(self: *LuaState, idx: isize) bool {
+        const val = self.stack.get(idx);
+        return convertToBoolean(val);
+    }
+
+    pub fn toNumber(self: *LuaState, idx: isize) f64 {
+        const result = self.toNumberX(idx);
+        return result[0];
+    }
+
+    pub fn toNumberX(self: *LuaState, idx: isize) struct { f64, bool } {
+        const val = self.stack.get(idx);
+        return switch (val) {
+            .number => |n| .{ n, true },
+            .integer => |n| .{ @as(f64, @floatFromInt(n)), true },
+            else => .{ 0, false },
+        };
+    }
+
+    pub fn toInteger(self: *LuaState, idx: isize) f64 {
+        const result = self.toIntegerX(idx);
+        return result[0];
+    }
+
+    pub fn toIntegerX(self: *LuaState, idx: isize) struct { f64, bool } {
+        const val = self.stack.get(idx);
+        return switch (val) {
+            .integer => |n| .{ n, true },
+            else => .{ 0, false },
+        };
+    }
+
+    pub fn toString(self: *LuaState, idx: isize) []const u8 {
+        const result = self.toStringX(idx);
+        return result[0];
+    }
+
+    pub fn toStringX(self: *LuaState, idx: isize) struct { []const u8, bool } {
+        const val = self.stack.get(idx);
+        return switch (val) {
+            .string => |s| .{ s, true },
+            .integer => |n| blk: {
+                const s = std.fmt.allocPrint(self.alloc, "{d}", .{n}) catch break :blk .{ "", false };
+                break :blk .{ s, true };
+            },
+            .number => |n| blk: {
+                const s = std.fmt.allocPrint(self.alloc, "{d}", .{n}) catch break :blk .{ "", false };
+                break :blk .{ s, true };
+            },
+            else => .{ "", false },
+        };
+    }
+};
+
+fn convertToBoolean(val: LuaValue) bool {
+    return switch (val) {
+        .nil => false,
+        .boolean => |b| b,
+        else => true,
+    };
+}
