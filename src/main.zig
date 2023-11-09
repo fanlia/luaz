@@ -66,11 +66,68 @@ fn printCode(f: *lib.Prototype, writer: anytype, alloc: std.mem.Allocator) !void
         if (f.lineInfo.len > 0) {
             line = try std.fmt.allocPrint(alloc, "{d}", .{f.lineInfo[pc]});
         }
-        try writer.print("\t{d}\t[{s}]\t0x{X:0>8}\n", .{
+        const i = lib.Instruction{ .data = c };
+        try writer.print("\t{d}\t[{s}]\t{s} \t", .{
             pc + 1,
             line,
-            c,
+            i.opName(),
         });
+        try printOperands(i, writer);
+        try writer.print("\n", .{});
+    }
+}
+
+fn printOperands(i: lib.Instruction, writer: anytype) !void {
+    switch (i.opMode()) {
+        .IABC => {
+            const result = i.ABC();
+            const a = result[0];
+            const b = result[1];
+            const c = result[2];
+
+            try writer.print("{d}", .{a});
+
+            if (i.bMode() != .OpArgN) {
+                if (b > 0xFF) {
+                    try writer.print(" {d}", .{-1 - (b & 0xFF)});
+                } else {
+                    try writer.print(" {d}", .{b});
+                }
+            }
+
+            if (i.cMode() != .OpArgN) {
+                if (c > 0xFF) {
+                    try writer.print(" {d}", .{-1 - (c & 0xFF)});
+                } else {
+                    try writer.print(" {d}", .{c});
+                }
+            }
+        },
+        .IABx => {
+            const result = i.ABx();
+            const a = result[0];
+            const bx = result[1];
+
+            try writer.print("{d}", .{a});
+
+            if (i.bMode() == .OpArgK) {
+                try writer.print(" {d}", .{-1 - (bx & 0xFF)});
+            } else if (i.bMode() == .OpArgU) {
+                try writer.print(" {d}", .{bx});
+            }
+        },
+        .IAsBx => {
+            const result = i.AsBx();
+            const a = result[0];
+            const bx = result[1];
+
+            try writer.print("{d} {d}", .{ a, bx });
+        },
+        .IAx => {
+            const ax = i.Ax();
+
+            try writer.print("{d}", .{-1 - ax});
+        },
     }
 }
 

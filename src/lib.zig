@@ -313,3 +313,177 @@ test "Reader readBytes" {
     const bytes = reader.readBytes(2);
     try expect(eql(u8, bytes, &[_]u8{ 1, 2 }));
 }
+
+const OpCodeMode = enum {
+    IABC,
+    IABx,
+    IAsBx,
+    IAx,
+};
+
+const OpCodeEnum = enum {
+    OP_MOVE,
+    OP_LOADK,
+    OP_LOADKX,
+    OP_LOADBOOL,
+    OP_LOADNIL,
+    OP_GETUPVAL,
+    OP_GETTABUP,
+    OP_GETTABLE,
+    OP_SETTABUP,
+    OP_SETUPVAL,
+    OP_SETTABLE,
+    OP_NEWTABLE,
+    OP_SELF,
+    OP_ADD,
+    OP_SUB,
+    OP_MUL,
+    OP_MOD,
+    OP_POW,
+    OP_DIV,
+    OP_IDIV,
+    OP_BAND,
+    OP_BOR,
+    OP_BXOR,
+    OP_SHL,
+    OP_SHR,
+    OP_UNM,
+    OP_BNOT,
+    OP_NOT,
+    OP_LEN,
+    OP_CONCAT,
+    OP_JMP,
+    OP_EQ,
+    OP_LT,
+    OP_LE,
+    OP_TEST,
+    OP_TESTSET,
+    OP_CALL,
+    OP_TAILCALL,
+    OP_RETURN,
+    OP_FORLOOP,
+    OP_FORPREP,
+    OP_TFORCALL,
+    OP_TFORLOOP,
+    OP_SETLIST,
+    OP_CLOSURE,
+    OP_VARARG,
+    OP_EXTRAARG,
+};
+
+const OpCodeType = enum {
+    OpArgN,
+    OpArgU,
+    OpArgR,
+    OpArgK,
+};
+
+pub const Instruction = struct {
+    data: u32,
+
+    const MAXARG_Bx: isize = 1 << 18 - 1;
+    const MAXARG_sBx: isize = MAXARG_Bx >> 1;
+
+    fn opcode(self: Instruction) usize {
+        return @as(usize, @intCast(self.data & 0x3F));
+    }
+
+    pub fn opName(self: Instruction) []const u8 {
+        return opcodes[self.opcode()].name;
+    }
+
+    pub fn opMode(self: Instruction) OpCodeMode {
+        return opcodes[self.opcode()].opMode;
+    }
+
+    pub fn bMode(self: Instruction) OpCodeType {
+        return opcodes[self.opcode()].argBMode;
+    }
+
+    pub fn cMode(self: Instruction) OpCodeType {
+        return opcodes[self.opcode()].argCMode;
+    }
+
+    pub fn ABC(self: Instruction) struct { isize, isize, isize } {
+        const a = @as(isize, @intCast(self.data >> 6 & 0xFF));
+        const c = @as(isize, @intCast(self.data >> 14 & 0x1FF));
+        const b = @as(isize, @intCast(self.data >> 23 & 0x1FF));
+        return .{ a, b, c };
+    }
+
+    pub fn ABx(self: Instruction) struct { isize, isize } {
+        const a = @as(isize, @intCast(self.data >> 6 & 0xFF));
+        const bx = @as(isize, @intCast(self.data >> 14));
+        return .{ a, bx };
+    }
+
+    pub fn AsBx(self: Instruction) struct { isize, isize } {
+        const result = self.ABx();
+        const a = result[0];
+        const bx = result[1] - MAXARG_sBx;
+        return .{ a, bx };
+    }
+
+    pub fn Ax(self: Instruction) isize {
+        return @as(isize, @intCast(self.data >> 6));
+    }
+};
+
+const OpCode = struct {
+    testFlag: bool,
+    setAflag: bool,
+    argBMode: OpCodeType,
+    argCMode: OpCodeType,
+    opMode: OpCodeMode,
+    name: []const u8,
+};
+
+var opcodes = [_]OpCode{
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgR, .argCMode = .OpArgN, .opMode = .IABC, .name = "MOVE    " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgK, .argCMode = .OpArgN, .opMode = .IABx, .name = "LOADK   " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgN, .argCMode = .OpArgN, .opMode = .IABx, .name = "LOADKX  " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgU, .argCMode = .OpArgU, .opMode = .IABC, .name = "LOADBOOL" },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgU, .argCMode = .OpArgN, .opMode = .IABC, .name = "LOADNIL " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgU, .argCMode = .OpArgN, .opMode = .IABC, .name = "GETUPVAL" },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgU, .argCMode = .OpArgK, .opMode = .IABC, .name = "GETTABUP" },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgR, .argCMode = .OpArgK, .opMode = .IABC, .name = "GETTABLE" },
+    OpCode{ .testFlag = false, .setAflag = false, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "SETTABUP" },
+    OpCode{ .testFlag = false, .setAflag = false, .argBMode = .OpArgU, .argCMode = .OpArgN, .opMode = .IABC, .name = "SETUPVAL" },
+    OpCode{ .testFlag = false, .setAflag = false, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "SETTABLE" },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgU, .argCMode = .OpArgU, .opMode = .IABC, .name = "NEWTABLE" },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgR, .argCMode = .OpArgK, .opMode = .IABC, .name = "SELF    " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "ADD     " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "SUB     " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "MUL     " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "MOD     " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "POW     " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "DIV     " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "IDIV    " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "BAND    " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "BOR     " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "BXOR    " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "SHL     " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "SHR     " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgR, .argCMode = .OpArgN, .opMode = .IABC, .name = "UNM     " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgR, .argCMode = .OpArgN, .opMode = .IABC, .name = "BNOT    " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgR, .argCMode = .OpArgN, .opMode = .IABC, .name = "NOT     " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgR, .argCMode = .OpArgN, .opMode = .IABC, .name = "LEN     " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgR, .argCMode = .OpArgR, .opMode = .IABC, .name = "CONCAT  " },
+    OpCode{ .testFlag = false, .setAflag = false, .argBMode = .OpArgR, .argCMode = .OpArgN, .opMode = .IAsBx, .name = "JMP     " },
+    OpCode{ .testFlag = true, .setAflag = false, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "EQ      " },
+    OpCode{ .testFlag = true, .setAflag = false, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "LT      " },
+    OpCode{ .testFlag = true, .setAflag = false, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "LE      " },
+    OpCode{ .testFlag = true, .setAflag = false, .argBMode = .OpArgN, .argCMode = .OpArgU, .opMode = .IABC, .name = "TEST    " },
+    OpCode{ .testFlag = true, .setAflag = true, .argBMode = .OpArgR, .argCMode = .OpArgU, .opMode = .IABC, .name = "TESTSET " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgU, .argCMode = .OpArgU, .opMode = .IABC, .name = "CALL    " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgU, .argCMode = .OpArgU, .opMode = .IABC, .name = "TAILCALL" },
+    OpCode{ .testFlag = false, .setAflag = false, .argBMode = .OpArgU, .argCMode = .OpArgN, .opMode = .IABC, .name = "RETURN  " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgR, .argCMode = .OpArgN, .opMode = .IAsBx, .name = "FORLOOP " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgR, .argCMode = .OpArgN, .opMode = .IAsBx, .name = "FORPREP " },
+    OpCode{ .testFlag = false, .setAflag = false, .argBMode = .OpArgN, .argCMode = .OpArgU, .opMode = .IABC, .name = "TFORCALL" },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgR, .argCMode = .OpArgN, .opMode = .IAsBx, .name = "TFORLOOP" },
+    OpCode{ .testFlag = false, .setAflag = false, .argBMode = .OpArgU, .argCMode = .OpArgU, .opMode = .IABC, .name = "SETLIST " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgU, .argCMode = .OpArgN, .opMode = .IABx, .name = "CLOSURE " },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgU, .argCMode = .OpArgN, .opMode = .IABC, .name = "VARARG  " },
+    OpCode{ .testFlag = false, .setAflag = false, .argBMode = .OpArgU, .argCMode = .OpArgU, .opMode = .IAx, .name = "EXTRAARG" },
+};
