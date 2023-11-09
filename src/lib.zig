@@ -532,7 +532,7 @@ const LuaStack = struct {
     }
 
     fn check(self: *LuaStack, n: usize) !void {
-        const free = self.slots.items.len - self.top;
+        const free = self.slots.capacity - self.top;
         var i = free;
         while (i < n) : (i += 1) {
             try self.slots.append(LuaValue{ .nil = {} });
@@ -543,7 +543,7 @@ const LuaStack = struct {
         if (self.top == self.slots.capacity) {
             return error.StackOverflow;
         }
-        try self.slots.append(val);
+        try self.slots.insert(self.top, val);
         self.top += 1;
     }
 
@@ -774,11 +774,7 @@ pub const LuaState = struct {
 
     pub fn toNumberX(self: *LuaState, idx: isize) struct { f64, bool } {
         const val = self.stack.get(idx);
-        return switch (val) {
-            .number => |n| .{ n, true },
-            .integer => |n| .{ @as(f64, @floatFromInt(n)), true },
-            else => .{ 0, false },
-        };
+        return convertToFloat(val);
     }
 
     pub fn toInteger(self: *LuaState, idx: isize) f64 {
@@ -788,10 +784,7 @@ pub const LuaState = struct {
 
     pub fn toIntegerX(self: *LuaState, idx: isize) struct { f64, bool } {
         const val = self.stack.get(idx);
-        return switch (val) {
-            .integer => |n| .{ n, true },
-            else => .{ 0, false },
-        };
+        return convertToInteger(val);
     }
 
     pub fn toString(self: *LuaState, idx: isize) []const u8 {
@@ -814,6 +807,82 @@ pub const LuaState = struct {
             else => .{ "", false },
         };
     }
+
+    pub fn arith(self: *LuaState, op: ArithOp) !void {
+        var a: LuaValue = undefined;
+        var b: LuaValue = undefined;
+
+        b = try self.stack.pop();
+        if (op != .LUA_OPUNM and op != .LUA_OPBNOT) {
+            a = try self.stack.pop();
+        } else {
+            a = b;
+        }
+
+        const operator = operators[@as(usize, @intFromEnum(op))];
+        const result = _arith(a, b, operator);
+        if (result) |val| {
+            try self.stack.push(val);
+        } else {
+            return error.ArithmeticError;
+        }
+    }
+
+    pub fn compare(self: *LuaState, idx1: isize, idx2: isize, op: ComparOp) bool {
+        const a = self.stack.get(idx1);
+        const b = self.stack.get(idx2);
+
+        return switch (op) {
+            .LUA_OPEQ => _eq(a, b),
+            .LUA_OPLT => _lt(a, b),
+            .LUA_OPLE => _le(a, b),
+        };
+    }
+
+    pub fn len(self: *LuaState, idx: isize) !void {
+        const val = self.stack.get(idx);
+        switch (val) {
+            .string => |s| {
+                try self.stack.push(LuaValue{ .integer = @as(i64, @intCast(s.len)) });
+            },
+            else => return error.LengthError,
+        }
+    }
+
+    pub fn concat(self: *LuaState, n: isize) !void {
+        if (n == 0) {
+            try self.stack.push(LuaValue{ .string = "" });
+        } else if (n >= 2) {
+            var i: isize = 1;
+            while (i < n) : (i += 1) {
+                if (self.isString(-1) and self.isString(-2)) {
+                    const s2 = self.toString(-1);
+                    const s1 = self.toString(-2);
+                    _ = try self.stack.pop();
+                    _ = try self.stack.pop();
+                    const s = try std.fmt.allocPrint(self.alloc, "{s}{s}", .{ s1, s2 });
+                    try self.stack.push(LuaValue{ .string = s });
+                    continue;
+                }
+            }
+        }
+        // n = 1, do nothing
+    }
+
+    pub fn printStack(self: *LuaState, writer: anytype) !void {
+        var top = self.getTop();
+        var i: isize = 1;
+        while (i <= top) : (i += 1) {
+            const t = self.getType(i);
+            switch (t) {
+                .LUA_TBOOLEAN => try writer.print("[{any}]", .{self.toBoolean(i)}),
+                .LUA_TNUMBER => try writer.print("[{d}]", .{self.toNumber(i)}),
+                .LUA_TSTRING => try writer.print("[\"{s}\"]", .{self.toString(i)}),
+                else => try writer.print("[{s}]", .{self.typeName(t)}),
+            }
+        }
+        try writer.print("\n", .{});
+    }
 };
 
 fn convertToBoolean(val: LuaValue) bool {
@@ -822,4 +891,382 @@ fn convertToBoolean(val: LuaValue) bool {
         .boolean => |b| b,
         else => true,
     };
+}
+
+fn iFloorDiv(a: i64, b: i64) i64 {
+    return @divFloor(a, b);
+}
+
+fn fFloorDiv(a: f64, b: f64) f64 {
+    return @divFloor(a, b);
+}
+
+test "div" {
+    try expect(iFloorDiv(5, 3) == 1);
+    try expect(iFloorDiv(-5, 3) == -2);
+    try expect(fFloorDiv(5, -3.0) == -2.0);
+    try expect(fFloorDiv(-5.0, -3.0) == 1.0);
+}
+
+fn iMod(a: i64, b: i64) i64 {
+    return @mod(a, b);
+}
+
+fn fMod(a: f64, b: f64) f64 {
+    return @mod(a, b);
+}
+
+test "mod" {
+    try expect(iMod(5, 3) == 2);
+    try expect(iMod(-5, 3) == 1);
+    try expect(fMod(5, -3.0) == 2.0);
+    try expect(fMod(-5.0, -3.0) == -2.0);
+}
+
+fn shiftLeft(a: i64, n: i64) i64 {
+    if (n >= 0) {
+        return a << @as(u6, @intCast(n));
+    } else {
+        return shiftRight(a, -n);
+    }
+}
+
+fn shiftRight(a: i64, n: i64) i64 {
+    if (n >= 0) {
+        return @as(i64, @intCast(@as(u64, @bitCast(a)) >> @as(u6, @intCast(n))));
+    } else {
+        return shiftLeft(a, -n);
+    }
+}
+
+test "shift" {
+    try expect(shiftRight(-1, 63) == 1);
+    try expect(shiftLeft(2, -1) == 1);
+}
+
+fn floatToInteger(f: f64) struct { i64, bool } {
+    const i = @as(i64, @intFromFloat(f));
+    return .{ i, @as(f64, @floatFromInt(i)) == f };
+}
+
+fn parseInteger(str: []const u8) struct { i64, bool } {
+    const i = std.fmt.parseInt(i64, str, 10) catch return .{ 0, false };
+    return .{ i, true };
+}
+
+fn parseFloat(str: []const u8) struct { f64, bool } {
+    const f = std.fmt.parseFloat(f64, str) catch return .{ 0, false };
+    return .{ f, true };
+}
+
+fn convertToFloat(val: LuaValue) struct { f64, bool } {
+    return switch (val) {
+        .number => |n| .{ n, true },
+        .integer => |n| .{ @as(f64, @floatFromInt(n)), true },
+        .string => |s| parseFloat(s),
+        else => .{ 0, false },
+    };
+}
+
+fn convertToInteger(val: LuaValue) struct { i64, bool } {
+    return switch (val) {
+        .integer => |n| .{ n, true },
+        .number => |n| .{ @as(i64, @intFromFloat(n)), true },
+        .string => |s| _stringToInteger(s),
+        else => .{ 0, false },
+    };
+}
+
+fn _stringToInteger(s: []const u8) struct { i64, bool } {
+    const iResult = parseInteger(s);
+    if (iResult[1]) {
+        return iResult;
+    }
+    const fResult = parseFloat(s);
+    if (fResult[1]) {
+        return floatToInteger(fResult[0]);
+    }
+    return .{ 0, false };
+}
+
+const ArithOp = enum {
+    LUA_OPADD,
+    LUA_OPSUB,
+    LUA_OPMUL,
+    LUA_OPMOD,
+    LUA_OPPOW,
+    LUA_OPDIV,
+    LUA_OPIDIV,
+    LUA_OPBAND,
+    LUA_OPBOR,
+    LUA_OPBXOR,
+    LUA_OPSHL,
+    LUA_OPSHR,
+    LUA_OPUNM,
+    LUA_OPBNOT,
+};
+
+const ComparOp = enum {
+    LUA_OPEQ,
+    LUA_OPLT,
+    LUA_OPLE,
+};
+
+fn iadd(a: i64, b: i64) i64 {
+    return a + b;
+}
+
+fn fadd(a: f64, b: f64) f64 {
+    return a + b;
+}
+
+fn isub(a: i64, b: i64) i64 {
+    return a - b;
+}
+
+fn fsub(a: f64, b: f64) f64 {
+    return a - b;
+}
+
+fn imul(a: i64, b: i64) i64 {
+    return a * b;
+}
+
+fn fmul(a: f64, b: f64) f64 {
+    return a * b;
+}
+
+fn imod(a: i64, b: i64) i64 {
+    return iMod(a, b);
+}
+
+fn fmod(a: f64, b: f64) f64 {
+    return fMod(a, b);
+}
+
+fn pow(a: f64, b: f64) f64 {
+    return std.math.pow(f64, a, b);
+}
+
+fn div(a: f64, b: f64) f64 {
+    return a / b;
+}
+
+fn iidiv(a: i64, b: i64) i64 {
+    return iFloorDiv(a, b);
+}
+
+fn fidiv(a: f64, b: f64) f64 {
+    return fFloorDiv(a, b);
+}
+
+fn band(a: i64, b: i64) i64 {
+    return a & b;
+}
+
+fn bor(a: i64, b: i64) i64 {
+    return a | b;
+}
+
+fn bxor(a: i64, b: i64) i64 {
+    return a ^ b;
+}
+
+fn shl(a: i64, b: i64) i64 {
+    return shiftLeft(a, b);
+}
+
+fn shr(a: i64, b: i64) i64 {
+    return shiftRight(a, b);
+}
+
+fn iunm(a: i64, _: i64) i64 {
+    return -a;
+}
+
+fn funm(a: f64, _: f64) f64 {
+    return -a;
+}
+
+fn bnot(a: i64, _: i64) i64 {
+    return ~a;
+}
+
+const Operator = struct {
+    integerFunc: ?*const fn (i64, i64) i64,
+    floatFunc: ?*const fn (f64, f64) f64,
+};
+
+const operators = [_]Operator{
+    Operator{ .integerFunc = iadd, .floatFunc = fadd },
+    Operator{ .integerFunc = isub, .floatFunc = fsub },
+    Operator{ .integerFunc = imul, .floatFunc = fmul },
+    Operator{ .integerFunc = imod, .floatFunc = fmod },
+    Operator{ .integerFunc = null, .floatFunc = pow },
+    Operator{ .integerFunc = null, .floatFunc = div },
+    Operator{ .integerFunc = iidiv, .floatFunc = fidiv },
+    Operator{ .integerFunc = band, .floatFunc = null },
+    Operator{ .integerFunc = bor, .floatFunc = null },
+    Operator{ .integerFunc = bxor, .floatFunc = null },
+    Operator{ .integerFunc = shl, .floatFunc = null },
+    Operator{ .integerFunc = shr, .floatFunc = null },
+    Operator{ .integerFunc = iunm, .floatFunc = null },
+    Operator{ .integerFunc = bnot, .floatFunc = null },
+};
+
+fn _arith(a: LuaValue, b: LuaValue, op: Operator) ?LuaValue {
+    if (op.floatFunc == null) { // bitwise
+        if (op.integerFunc) |integerFunc| {
+            const aResult = convertToInteger(a);
+            if (aResult[1]) {
+                const x = aResult[0];
+                const bResult = convertToInteger(b);
+                if (bResult[1]) {
+                    const y = bResult[0];
+                    return LuaValue{ .integer = integerFunc(x, y) };
+                }
+            }
+        }
+    } else { // arith
+        if (op.integerFunc) |integerFunc| { // add, sub, mul, mod, idiv, unm
+            const aResult = convertToInteger(a);
+            if (aResult[1]) {
+                const x = aResult[0];
+                const bResult = convertToInteger(b);
+                if (bResult[1]) {
+                    const y = bResult[0];
+                    return LuaValue{ .integer = integerFunc(x, y) };
+                }
+            }
+        }
+        if (op.floatFunc) |floatFunc| {
+            const aResult = convertToFloat(a);
+            if (aResult[1]) {
+                const x = aResult[0];
+                const bResult = convertToFloat(b);
+                if (bResult[1]) {
+                    const y = bResult[0];
+                    return LuaValue{ .number = floatFunc(x, y) };
+                }
+            }
+        }
+    }
+    return null;
+}
+
+fn _eq(a: LuaValue, b: LuaValue) bool {
+    switch (a) {
+        .nil => {
+            return switch (b) {
+                .nil => true,
+                else => false,
+            };
+        },
+        .boolean => |x| {
+            return switch (b) {
+                .boolean => |y| x == y,
+                else => false,
+            };
+        },
+        .integer => |x| {
+            return switch (b) {
+                .integer => |y| x == y,
+                .number => |y| @as(f64, @floatFromInt(x)) == y,
+                else => false,
+            };
+        },
+        .number => |x| {
+            return switch (b) {
+                .number => |y| x == y,
+                .integer => |y| x == @as(f64, @floatFromInt(y)),
+                else => false,
+            };
+        },
+        .string => |x| {
+            return switch (b) {
+                .string => |y| std.mem.eql(u8, x, y),
+                else => false,
+            };
+        },
+    }
+}
+
+fn _lt(a: LuaValue, b: LuaValue) bool {
+    switch (a) {
+        .integer => |x| {
+            return switch (b) {
+                .integer => |y| x < y,
+                .number => |y| @as(f64, @floatFromInt(x)) < y,
+                else => false,
+            };
+        },
+        .number => |x| {
+            return switch (b) {
+                .number => |y| x < y,
+                .integer => |y| x < @as(f64, @floatFromInt(y)),
+                else => false,
+            };
+        },
+        .string => |x| {
+            return switch (b) {
+                .string => |y| _lt_string(x, y),
+                else => false,
+            };
+        },
+        else => return false,
+    }
+}
+
+fn _le(a: LuaValue, b: LuaValue) bool {
+    switch (a) {
+        .integer => |x| {
+            return switch (b) {
+                .integer => |y| x <= y,
+                .number => |y| @as(f64, @floatFromInt(x)) <= y,
+                else => false,
+            };
+        },
+        .number => |x| {
+            return switch (b) {
+                .number => |y| x <= y,
+                .integer => |y| x <= @as(f64, @floatFromInt(y)),
+                else => false,
+            };
+        },
+        .string => |x| {
+            return switch (b) {
+                .string => |y| _le_string(x, y),
+                else => false,
+            };
+        },
+        else => return false,
+    }
+}
+
+fn _lt_string(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) {
+        return false;
+    }
+
+    for (a, b) |x, y| {
+        if (x >= y) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+fn _le_string(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) {
+        return false;
+    }
+
+    for (a, b) |x, y| {
+        if (x > y) {
+            return false;
+        }
+    }
+
+    return true;
 }

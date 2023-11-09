@@ -9,22 +9,20 @@ pub fn main() !void {
     const allocator = arena.allocator();
 
     var ls = try lib.LuaState.new(allocator);
-    try ls.pushBoolean(true);
+    try ls.pushInteger(1);
+    try ls.pushString("2.0");
+    try ls.pushString("3.0");
+    try ls.pushNumber(4.0);
     try ls.printStack(writer);
-    try ls.pushInteger(10);
+
+    try ls.arith(.LUA_OPADD);
     try ls.printStack(writer);
-    try ls.pushNil();
+    try ls.arith(.LUA_OPBNOT);
     try ls.printStack(writer);
-    try ls.pushString("hello");
+    try ls.len(2);
     try ls.printStack(writer);
-    try ls.pushValue(-4);
+    try ls.concat(3);
     try ls.printStack(writer);
-    try ls.replace(3);
-    try ls.printStack(writer);
-    try ls.setTop(6);
-    try ls.printStack(writer);
-    try ls.remove(-3);
-    try ls.printStack(writer);
-    try ls.setTop(-5);
+    try ls.pushBoolean(ls.compare(1, 2, .LUA_OPEQ));
     try ls.printStack(writer);
 }
