@@ -587,12 +587,13 @@ const LuaStack = struct {
     }
 
     fn reverse(self: *LuaStack, start: usize, end: usize) void {
+        var slots = self.slots.items;
         var from = start;
         var to = end;
         while (from < to) {
-            const tmp = self.slots.items[from];
-            self.slots.items[from] = self.slots.items[to];
-            self.slots.items[to] = tmp;
+            const tmp = slots[from];
+            slots[from] = slots[to];
+            slots[to] = tmp;
             from += 1;
             to -= 1;
         }
