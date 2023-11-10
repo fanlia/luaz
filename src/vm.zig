@@ -825,7 +825,7 @@ pub const LuaState = struct {
         }
     }
 
-    pub fn compare(self: *LuaState, idx1: isize, idx2: isize, op: ComparOp) bool {
+    pub fn compare(self: *LuaState, idx1: isize, idx2: isize, op: CompareOp) bool {
         const a = self.stack.get(idx1);
         const b = self.stack.get(idx2);
 
@@ -1030,7 +1030,7 @@ const ArithOp = enum {
     LUA_OPBNOT,
 };
 
-const ComparOp = enum {
+const CompareOp = enum {
     LUA_OPEQ,
     LUA_OPLT,
     LUA_OPLE,
@@ -1297,61 +1297,193 @@ fn _le_string(a: []const u8, b: []const u8) bool {
 
 const LuaVM = LuaState;
 
-fn move(i: Instruction, vm: *LuaVM) !void {
-    const result = i.ABC();
-    const a = result[0] + 1;
-    const b = result[1] + 1;
-    try vm.copy(b, a);
-}
-
-fn jmp(i: Instruction, vm: *LuaVM) !void {
-    const result = i.AsBx();
-    const a = result[0];
-    const sBx = result[1];
-    vm.addPC(sBx);
-    if (a != 0) {
-        return error.ToDo;
+const VMInstuction = struct {
+    fn move(i: Instruction, vm: *LuaVM) !void {
+        const result = i.ABC();
+        const a = result[0] + 1;
+        const b = result[1] + 1;
+        try vm.copy(b, a);
     }
-}
 
-fn loadNil(i: Instruction, vm: *LuaVM) !void {
-    const result = i.ABC();
-    const a = result[0] + 1;
-    const b = result[1];
-    try vm.pushNil();
-    var ii: isize = a;
-    while (ii <= a + b) : (ii += 1) {
-        try vm.copy(-1, ii);
+    fn jmp(i: Instruction, vm: *LuaVM) !void {
+        const result = i.AsBx();
+        const a = result[0];
+        const sBx = result[1];
+        vm.addPC(sBx);
+        if (a != 0) {
+            return error.ToDo;
+        }
     }
-    try vm.pop(1);
-}
 
-fn loadBool(i: Instruction, vm: *LuaVM) !void {
-    const result = i.ABC();
-    const a = result[0] + 1;
-    const b = result[1];
-    const c = result[2];
-    try vm.pushBoolean(b != 0);
-    try vm.replace(a);
-    if (c != 0) {
-        try vm.addPC(1);
+    fn loadNil(i: Instruction, vm: *LuaVM) !void {
+        const result = i.ABC();
+        const a = result[0] + 1;
+        const b = result[1];
+        try vm.pushNil();
+        var ii: isize = a;
+        while (ii <= a + b) : (ii += 1) {
+            try vm.copy(-1, ii);
+        }
+        try vm.pop(1);
     }
-}
 
-fn loadK(i: Instruction, vm: *LuaVM) !void {
-    const result = i.ABx();
-    const a = result[0] + 1;
-    const bx = result[1];
-    try vm.getConst(bx);
-    try vm.replace(a);
-}
+    fn loadBool(i: Instruction, vm: *LuaVM) !void {
+        const result = i.ABC();
+        const a = result[0] + 1;
+        const b = result[1];
+        const c = result[2];
+        try vm.pushBoolean(b != 0);
+        try vm.replace(a);
+        if (c != 0) {
+            try vm.addPC(1);
+        }
+    }
 
-fn loadKx(i: Instruction, vm: *LuaVM) !void {
-    const result = i.ABx();
-    const a = result[0] + 1;
-    const ni = Instruction{ .data = vm.fetch() };
-    const ax = ni.Ax();
+    fn loadK(i: Instruction, vm: *LuaVM) !void {
+        const result = i.ABx();
+        const a = result[0] + 1;
+        const bx = result[1];
+        try vm.getConst(bx);
+        try vm.replace(a);
+    }
 
-    try vm.getConst(ax);
-    try vm.replace(a);
-}
+    fn loadKx(i: Instruction, vm: *LuaVM) !void {
+        const result = i.ABx();
+        const a = result[0] + 1;
+        const ni = Instruction{ .data = vm.fetch() };
+        const ax = ni.Ax();
+
+        try vm.getConst(ax);
+        try vm.replace(a);
+    }
+
+    fn _binaryArith(i: Instruction, vm: *LuaVM, op: ArithOp) !void {
+        const result = i.ABC();
+        const a = result[0] + 1;
+        const b = result[1];
+        const c = result[2];
+
+        try vm.getRK(b);
+        try vm.getRK(c);
+        try vm.arith(op);
+        try vm.replace(a);
+    }
+
+    fn _unaryArith(i: Instruction, vm: *LuaVM, op: ArithOp) !void {
+        const result = i.ABC();
+        const a = result[0] + 1;
+        const b = result[1] + 1;
+
+        try vm.pushValue(b);
+        try vm.arith(op);
+        try vm.replace(a);
+    }
+
+    fn add(i: Instruction, vm: *LuaVM) !void {
+        return _binaryArith(i, vm, .LUA_OPADD);
+    }
+
+    fn sub(i: Instruction, vm: *LuaVM) !void {
+        return _binaryArith(i, vm, .LUA_OPSUB);
+    }
+
+    fn mul(i: Instruction, vm: *LuaVM) !void {
+        return _binaryArith(i, vm, .LUA_OPMUL);
+    }
+
+    fn mod(i: Instruction, vm: *LuaVM) !void {
+        return _binaryArith(i, vm, .LUA_OPMOD);
+    }
+
+    fn pow(i: Instruction, vm: *LuaVM) !void {
+        return _binaryArith(i, vm, .LUA_OPPOW);
+    }
+
+    fn div(i: Instruction, vm: *LuaVM) !void {
+        return _binaryArith(i, vm, .LUA_OPDIV);
+    }
+
+    fn idiv(i: Instruction, vm: *LuaVM) !void {
+        return _binaryArith(i, vm, .LUA_OPIDIV);
+    }
+
+    fn band(i: Instruction, vm: *LuaVM) !void {
+        return _binaryArith(i, vm, .LUA_OPBAND);
+    }
+
+    fn bor(i: Instruction, vm: *LuaVM) !void {
+        return _binaryArith(i, vm, .LUA_OPBOR);
+    }
+
+    fn bxor(i: Instruction, vm: *LuaVM) !void {
+        return _binaryArith(i, vm, .LUA_OPBXOR);
+    }
+
+    fn shl(i: Instruction, vm: *LuaVM) !void {
+        return _binaryArith(i, vm, .LUA_OPSHL);
+    }
+
+    fn shr(i: Instruction, vm: *LuaVM) !void {
+        return _binaryArith(i, vm, .LUA_OPSHR);
+    }
+
+    fn unm(i: Instruction, vm: *LuaVM) !void {
+        return _unaryArith(i, vm, .LUA_OPUNM);
+    }
+
+    fn bnot(i: Instruction, vm: *LuaVM) !void {
+        return _unaryArith(i, vm, .LUA_OPBNOT);
+    }
+
+    fn _len(i: Instruction, vm: *LuaVM) !void {
+        const result = i.ABC();
+        const a = result[0] + 1;
+        const b = result[1] + 1;
+        try vm.len(b);
+        try vm.replace(a);
+    }
+
+    fn concat(i: Instruction, vm: *LuaVM) !void {
+        const result = i.ABC();
+        const a = result[0] + 1;
+        const b = result[1] + 1;
+        const c = result[2] + 1;
+
+        const n = c - b + 1;
+        _ = try vm.checkStack(n);
+
+        var ii: isize = b;
+        while (ii <= c) : (ii += 1) {
+            try vm.pushValue(ii);
+        }
+        try vm.concat(n);
+        try vm.replace(a);
+    }
+
+    fn _compare(i: Instruction, vm: *LuaVM, op: CompareOp) !void {
+        const result = i.ABC();
+        const a = result[0];
+        const b = result[1];
+        const c = result[2];
+
+        try vm.getRK(b);
+        try vm.getRK(c);
+
+        if (vm.compare(-2, -1, op) != (a != 0)) {
+            try vm.addPC(1);
+        }
+        try vm.pop(2);
+    }
+
+    fn eq(i: Instruction, vm: *LuaVM) !void {
+        return _compare(i, vm, .LUA_OPEQ);
+    }
+
+    fn lt(i: Instruction, vm: *LuaVM) !void {
+        return _compare(i, vm, .LUA_OPLT);
+    }
+
+    fn le(i: Instruction, vm: *LuaVM) !void {
+        return _compare(i, vm, .LUA_OPLE);
+    }
+};
