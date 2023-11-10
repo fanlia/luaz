@@ -172,7 +172,7 @@ fn constantToString(k: lib.Constant, alloc: std.mem.Allocator) ![]const u8 {
         .nil => "nil",
         .boolean => |v| try std.fmt.allocPrint(alloc, "{}", .{v}),
         .integer => |v| try std.fmt.allocPrint(alloc, "{d}", .{v}),
-        .number => |v| try std.fmt.allocPrint(alloc, "{e}", .{v}),
+        .float => |v| try std.fmt.allocPrint(alloc, "{e}", .{v}),
         .shortStr => |v| try std.fmt.allocPrint(alloc, "\"{s}\"", .{v}),
         .longStr => |v| try std.fmt.allocPrint(alloc, "\"{s}\"", .{v}),
     };

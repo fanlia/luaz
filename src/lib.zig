@@ -63,7 +63,7 @@ pub const Constant = union(enum) {
     nil,
     boolean: bool,
     integer: i64,
-    number: f64,
+    float: f64,
     shortStr: []const u8,
     longStr: []const u8,
 };
@@ -198,7 +198,7 @@ const Reader = struct {
             TAG_NIL => Constant{ .nil = {} },
             TAG_BOOLEAN => Constant{ .boolean = (self.readByte() != 0) },
             TAG_INTEGER => Constant{ .integer = self.readLuaInteger() },
-            TAG_NUMBER => Constant{ .number = self.readLuaNumber() },
+            TAG_NUMBER => Constant{ .float = self.readLuaNumber() },
             TAG_SHORT_STR => Constant{ .shortStr = self.readString() },
             TAG_LONG_STR => Constant{ .longStr = self.readString() },
             else => unreachable,
@@ -505,7 +505,7 @@ pub const LuaValue = union(enum) {
     nil,
     boolean: bool,
     integer: i64,
-    number: f64,
+    float: f64,
     string: []const u8,
 };
 
@@ -514,7 +514,7 @@ fn typeOf(val: LuaValue) LuaType {
         .nil => .LUA_TNIL,
         .boolean => .LUA_TBOOLEAN,
         .integer => .LUA_TNUMBER,
-        .number => .LUA_TNUMBER,
+        .float => .LUA_TNUMBER,
         .string => .LUA_TSTRING,
     };
 }
@@ -695,7 +695,7 @@ pub const LuaState = struct {
     }
 
     pub fn pushNumber(self: *LuaState, n: f64) !void {
-        try self.stack.push(LuaValue{ .number = n });
+        try self.stack.push(LuaValue{ .float = n });
     }
 
     pub fn pushString(self: *LuaState, s: []const u8) !void {
@@ -800,7 +800,7 @@ pub const LuaState = struct {
                 const s = std.fmt.allocPrint(self.alloc, "{d}", .{n}) catch break :blk .{ "", false };
                 break :blk .{ s, true };
             },
-            .number => |n| blk: {
+            .float => |n| blk: {
                 const s = std.fmt.allocPrint(self.alloc, "{d}", .{n}) catch break :blk .{ "", false };
                 break :blk .{ s, true };
             },
@@ -961,7 +961,7 @@ fn parseFloat(str: []const u8) struct { f64, bool } {
 
 fn convertToFloat(val: LuaValue) struct { f64, bool } {
     return switch (val) {
-        .number => |n| .{ n, true },
+        .float => |n| .{ n, true },
         .integer => |n| .{ @as(f64, @floatFromInt(n)), true },
         .string => |s| parseFloat(s),
         else => .{ 0, false },
@@ -971,7 +971,7 @@ fn convertToFloat(val: LuaValue) struct { f64, bool } {
 fn convertToInteger(val: LuaValue) struct { i64, bool } {
     return switch (val) {
         .integer => |n| .{ n, true },
-        .number => |n| .{ @as(i64, @intFromFloat(n)), true },
+        .float => |n| .{ @as(i64, @intFromFloat(n)), true },
         .string => |s| _stringToInteger(s),
         else => .{ 0, false },
     };
@@ -1146,7 +1146,7 @@ fn _arith(a: LuaValue, b: LuaValue, op: Operator) ?LuaValue {
                 const bResult = convertToFloat(b);
                 if (bResult[1]) {
                     const y = bResult[0];
-                    return LuaValue{ .number = floatFunc(x, y) };
+                    return LuaValue{ .float = floatFunc(x, y) };
                 }
             }
         }
@@ -1171,13 +1171,13 @@ fn _eq(a: LuaValue, b: LuaValue) bool {
         .integer => |x| {
             return switch (b) {
                 .integer => |y| x == y,
-                .number => |y| @as(f64, @floatFromInt(x)) == y,
+                .float => |y| @as(f64, @floatFromInt(x)) == y,
                 else => false,
             };
         },
-        .number => |x| {
+        .float => |x| {
             return switch (b) {
-                .number => |y| x == y,
+                .float => |y| x == y,
                 .integer => |y| x == @as(f64, @floatFromInt(y)),
                 else => false,
             };
@@ -1196,13 +1196,13 @@ fn _lt(a: LuaValue, b: LuaValue) bool {
         .integer => |x| {
             return switch (b) {
                 .integer => |y| x < y,
-                .number => |y| @as(f64, @floatFromInt(x)) < y,
+                .float => |y| @as(f64, @floatFromInt(x)) < y,
                 else => false,
             };
         },
-        .number => |x| {
+        .float => |x| {
             return switch (b) {
-                .number => |y| x < y,
+                .float => |y| x < y,
                 .integer => |y| x < @as(f64, @floatFromInt(y)),
                 else => false,
             };
@@ -1222,13 +1222,13 @@ fn _le(a: LuaValue, b: LuaValue) bool {
         .integer => |x| {
             return switch (b) {
                 .integer => |y| x <= y,
-                .number => |y| @as(f64, @floatFromInt(x)) <= y,
+                .float => |y| @as(f64, @floatFromInt(x)) <= y,
                 else => false,
             };
         },
-        .number => |x| {
+        .float => |x| {
             return switch (b) {
-                .number => |y| x <= y,
+                .float => |y| x <= y,
                 .integer => |y| x <= @as(f64, @floatFromInt(y)),
                 else => false,
             };
