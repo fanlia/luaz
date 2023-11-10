@@ -1,5 +1,5 @@
 const std = @import("std");
-const lib = @import("./vm.zig");
+const lib = @import("./libvm.zig");
 
 pub fn main() !void {
     const writer = std.io.getStdOut().writer();
