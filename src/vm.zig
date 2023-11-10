@@ -1309,7 +1309,7 @@ const VMInstuction = struct {
         const result = i.AsBx();
         const a = result[0];
         const sBx = result[1];
-        vm.addPC(sBx);
+        try vm.addPC(sBx);
         if (a != 0) {
             return error.ToDo;
         }
@@ -1485,5 +1485,73 @@ const VMInstuction = struct {
 
     fn le(i: Instruction, vm: *LuaVM) !void {
         return _compare(i, vm, .LUA_OPLE);
+    }
+
+    fn _not(i: Instruction, vm: *LuaVM) !void {
+        const result = i.ABC();
+        const a = result[0] + 1;
+        const b = result[1] + 1;
+
+        try vm.pushBoolean(!vm.toBoolean(b));
+        try vm.replace(a);
+    }
+
+    fn testSet(i: Instruction, vm: *LuaVM) !void {
+        const result = i.ABC();
+        const a = result[0] + 1;
+        const b = result[1] + 1;
+        const c = result[1];
+
+        if (vm.toBoolean(b) == (c != 0)) {
+            try vm.copy(a, b);
+        } else {
+            try vm.addPC(1);
+        }
+    }
+
+    fn _test(i: Instruction, vm: *LuaVM) !void {
+        const result = i.ABC();
+        const a = result[0] + 1;
+        const c = result[1];
+
+        if (vm.toBoolean(a) != (c != 0)) {
+            try vm.addPC(1);
+        }
+    }
+
+    fn forPrep(i: Instruction, vm: *LuaVM) !void {
+        const result = i.AsBx();
+        const a = result[0] + 1;
+        const sBx = result[1];
+
+        // R(A) -= R(A+2);
+        try vm.pushValue(a);
+        try vm.pushValue(a + 2);
+        try vm.arith(.LUA_OPSUB);
+        try vm.replace(a);
+
+        // pc += sBx
+        try vm.addPC(sBx);
+    }
+
+    fn forLoop(i: Instruction, vm: *LuaVM) !void {
+        const result = i.AsBx();
+        const a = result[0] + 1;
+        const sBx = result[1];
+
+        // R(A) += R(A+2);
+        try vm.pushValue(a);
+        try vm.pushValue(a + 2);
+        try vm.arith(.LUA_OPADD);
+        try vm.replace(a);
+
+        // R(A) <?= R(A+1)
+        const isPositiveStep = vm.toNumber(a + 2) >= 0;
+        if ((isPositiveStep and vm.compare(a, a + 1, .LUA_OPLE)) or (!isPositiveStep and vm.compare(a + 1, a, .LUA_OPLE))) {
+            // pc += sBx
+            try vm.addPC(sBx);
+            // R(A+3) = R(A)
+            try vm.copy(a, a + 3);
+        }
     }
 };
