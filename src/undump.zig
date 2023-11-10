@@ -1,5 +1,5 @@
 const std = @import("std");
-const lib = @import("./lib.zig");
+const lib = @import("./vm.zig");
 
 pub fn main() !void {
     const writer = std.io.getStdOut().writer();
@@ -173,8 +173,7 @@ fn constantToString(k: lib.Constant, alloc: std.mem.Allocator) ![]const u8 {
         .boolean => |v| try std.fmt.allocPrint(alloc, "{}", .{v}),
         .integer => |v| try std.fmt.allocPrint(alloc, "{d}", .{v}),
         .float => |v| try std.fmt.allocPrint(alloc, "{e}", .{v}),
-        .shortStr => |v| try std.fmt.allocPrint(alloc, "\"{s}\"", .{v}),
-        .longStr => |v| try std.fmt.allocPrint(alloc, "\"{s}\"", .{v}),
+        .string => |v| try std.fmt.allocPrint(alloc, "\"{s}\"", .{v}),
     };
 }
 
