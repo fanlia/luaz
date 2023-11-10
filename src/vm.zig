@@ -597,7 +597,7 @@ pub const LuaState = struct {
     alloc: std.mem.Allocator,
     stack: *LuaStack,
     proto: *Prototype,
-    pc: usize,
+    pc: isize,
 
     pub fn new(stackSize: usize, proto: *Prototype, alloc: std.mem.Allocator) !*LuaState {
         var state = try alloc.create(LuaState);
@@ -881,23 +881,31 @@ pub const LuaState = struct {
         try writer.print("\n", .{});
     }
 
-    fn getPC(self: *LuaState) usize {
+    fn getPC(self: *LuaState) isize {
         return self.pc;
     }
 
-    fn addPC(self: *LuaState, n: usize) void {
+    fn addPC(self: *LuaState, n: isize) void {
         self.pc += n;
     }
 
     fn fetch(self: *LuaState) u32 {
-        const i = self.proto.code[self.pc];
+        const i = self.proto.code[@as(usize, @intCast(self.pc))];
         self.pc += 1;
         return i;
     }
 
-    fn getConst(self: *LuaState, idx: usize) !void {
-        const c = self.proto.constants[idx];
+    fn getConst(self: *LuaState, idx: isize) !void {
+        const c = self.proto.constants[@as(usize, @intCast(idx))];
         try self.stack.push(c);
+    }
+
+    fn getRK(self: *LuaState, idx: isize) !void {
+        if (idx > 0xFF) {
+            try self.getConst(idx & 0xFF);
+        } else {
+            try self.pushValue(idx + 1);
+        }
     }
 };
 
@@ -1285,4 +1293,65 @@ fn _le_string(a: []const u8, b: []const u8) bool {
     }
 
     return true;
+}
+
+const LuaVM = LuaState;
+
+fn move(i: Instruction, vm: *LuaVM) !void {
+    const result = i.ABC();
+    const a = result[0] + 1;
+    const b = result[1] + 1;
+    try vm.copy(b, a);
+}
+
+fn jmp(i: Instruction, vm: *LuaVM) !void {
+    const result = i.AsBx();
+    const a = result[0];
+    const sBx = result[1];
+    vm.addPC(sBx);
+    if (a != 0) {
+        return error.ToDo;
+    }
+}
+
+fn loadNil(i: Instruction, vm: *LuaVM) !void {
+    const result = i.ABC();
+    const a = result[0] + 1;
+    const b = result[1];
+    try vm.pushNil();
+    var ii: isize = a;
+    while (ii <= a + b) : (ii += 1) {
+        try vm.copy(-1, ii);
+    }
+    try vm.pop(1);
+}
+
+fn loadBool(i: Instruction, vm: *LuaVM) !void {
+    const result = i.ABC();
+    const a = result[0] + 1;
+    const b = result[1];
+    const c = result[2];
+    try vm.pushBoolean(b != 0);
+    try vm.replace(a);
+    if (c != 0) {
+        try vm.addPC(1);
+    }
+}
+
+fn loadK(i: Instruction, vm: *LuaVM) !void {
+    const result = i.ABx();
+    const a = result[0] + 1;
+    const bx = result[1];
+    try vm.getConst(bx);
+    try vm.replace(a);
+}
+
+fn loadKx(i: Instruction, vm: *LuaVM) !void {
+    const result = i.ABx();
+    const a = result[0] + 1;
+    const ni = Instruction{ .data = vm.fetch() };
+    const ax = ni.Ax();
+
+    try vm.getConst(ax);
+    try vm.replace(a);
 }
