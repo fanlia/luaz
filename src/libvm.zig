@@ -444,6 +444,7 @@ const VMError = error{
     InvalidIndex,
     ArithmeticError,
     LengthError,
+    NotATable,
 };
 
 const OpCode = struct {
@@ -464,11 +465,11 @@ var opcodes = [_]OpCode{
     OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgU, .argCMode = .OpArgN, .opMode = .IABC, .name = "LOADNIL ", .action = VMInstuction.loadNil },
     OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgU, .argCMode = .OpArgN, .opMode = .IABC, .name = "GETUPVAL", .action = VMInstuction.todo },
     OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgU, .argCMode = .OpArgK, .opMode = .IABC, .name = "GETTABUP", .action = VMInstuction.todo },
-    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgR, .argCMode = .OpArgK, .opMode = .IABC, .name = "GETTABLE", .action = VMInstuction.todo },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgR, .argCMode = .OpArgK, .opMode = .IABC, .name = "GETTABLE", .action = VMInstuction.getTable },
     OpCode{ .testFlag = false, .setAflag = false, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "SETTABUP", .action = VMInstuction.todo },
     OpCode{ .testFlag = false, .setAflag = false, .argBMode = .OpArgU, .argCMode = .OpArgN, .opMode = .IABC, .name = "SETUPVAL", .action = VMInstuction.todo },
-    OpCode{ .testFlag = false, .setAflag = false, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "SETTABLE", .action = VMInstuction.todo },
-    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgU, .argCMode = .OpArgU, .opMode = .IABC, .name = "NEWTABLE", .action = VMInstuction.todo },
+    OpCode{ .testFlag = false, .setAflag = false, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "SETTABLE", .action = VMInstuction.setTable },
+    OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgU, .argCMode = .OpArgU, .opMode = .IABC, .name = "NEWTABLE", .action = VMInstuction.newTable },
     OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgR, .argCMode = .OpArgK, .opMode = .IABC, .name = "SELF    ", .action = VMInstuction.todo },
     OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "ADD     ", .action = VMInstuction.add },
     OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgK, .argCMode = .OpArgK, .opMode = .IABC, .name = "SUB     ", .action = VMInstuction.sub },
@@ -500,7 +501,7 @@ var opcodes = [_]OpCode{
     OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgR, .argCMode = .OpArgN, .opMode = .IAsBx, .name = "FORPREP ", .action = VMInstuction.forPrep },
     OpCode{ .testFlag = false, .setAflag = false, .argBMode = .OpArgN, .argCMode = .OpArgU, .opMode = .IABC, .name = "TFORCALL", .action = VMInstuction.todo },
     OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgR, .argCMode = .OpArgN, .opMode = .IAsBx, .name = "TFORLOOP", .action = VMInstuction.todo },
-    OpCode{ .testFlag = false, .setAflag = false, .argBMode = .OpArgU, .argCMode = .OpArgU, .opMode = .IABC, .name = "SETLIST ", .action = VMInstuction.todo },
+    OpCode{ .testFlag = false, .setAflag = false, .argBMode = .OpArgU, .argCMode = .OpArgU, .opMode = .IABC, .name = "SETLIST ", .action = VMInstuction.setList },
     OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgU, .argCMode = .OpArgN, .opMode = .IABx, .name = "CLOSURE ", .action = VMInstuction.todo },
     OpCode{ .testFlag = false, .setAflag = true, .argBMode = .OpArgU, .argCMode = .OpArgN, .opMode = .IABC, .name = "VARARG  ", .action = VMInstuction.todo },
     OpCode{ .testFlag = false, .setAflag = false, .argBMode = .OpArgU, .argCMode = .OpArgU, .opMode = .IAx, .name = "EXTRAARG", .action = VMInstuction.todo },
@@ -937,6 +938,76 @@ pub const LuaState = struct {
             try self.pushValue(idx + 1);
         }
     }
+
+    pub fn createTable(self: *LuaState, nArr: usize, nRec: usize) !void {
+        const t = try LuaTable.new(nArr, nRec, self.alloc);
+        try self.stack.push(LuaValue{ .table = t });
+    }
+
+    pub fn newTable(self: *LuaState) !void {
+        try self.createTable(0, 0);
+    }
+
+    pub fn _getTable(self: *LuaState, t: LuaValue, k: LuaValue) !LuaType {
+        switch (t) {
+            .table => |tbl| {
+                const v = tbl.get(k);
+                try self.stack.push(v);
+                return typeOf(v);
+            },
+            else => {
+                return error.NotATable;
+            },
+        }
+    }
+
+    pub fn getTable(self: *LuaState, idx: isize) !void {
+        const t = self.stack.get(idx);
+        const k = try self.stack.pop();
+        _ = try self._getTable(t, k);
+    }
+
+    pub fn getField(self: *LuaState, idx: isize, k: []const u8) !LuaType {
+        const t = self.stack.get(idx);
+        return self._getTable(t, LuaValue{ .string = k });
+    }
+
+    pub fn getI(self: *LuaState, idx: isize, i: i64) !LuaType {
+        const t = self.stack.get(idx);
+        return self._getTable(t, LuaValue{ .integer = i });
+    }
+
+    pub fn setTable(self: *LuaState, idx: isize) !void {
+        const t = self.stack.get(idx);
+        const v = try self.stack.pop();
+        const k = try self.stack.pop();
+        return self._setTable(t, k, v);
+    }
+
+    pub fn _setTable(self: *LuaState, t: LuaValue, k: LuaValue, v: LuaValue) !void {
+        _ = self;
+        switch (t) {
+            .table => |tbl| {
+                try tbl.put(k, v);
+                return;
+            },
+            else => {
+                return error.NotATable;
+            },
+        }
+    }
+
+    pub fn setField(self: *LuaState, idx: isize, k: []const u8) !void {
+        const t = self.stack.get(idx);
+        const v = try self.stack.pop();
+        return self._setTable(t, LuaValue{ .string = k }, v);
+    }
+
+    pub fn setI(self: *LuaState, idx: isize, i: i64) !void {
+        const t = self.stack.get(idx);
+        const v = try self.stack.pop();
+        return self._setTable(t, LuaValue{ .integer = i }, v);
+    }
 };
 
 fn convertToBoolean(val: LuaValue) bool {
@@ -1209,40 +1280,7 @@ fn _arith(a: LuaValue, b: LuaValue, op: Operator) ?LuaValue {
 }
 
 fn _eq(a: LuaValue, b: LuaValue) bool {
-    switch (a) {
-        .nil => {
-            return switch (b) {
-                .nil => true,
-                else => false,
-            };
-        },
-        .boolean => |x| {
-            return switch (b) {
-                .boolean => |y| x == y,
-                else => false,
-            };
-        },
-        .integer => |x| {
-            return switch (b) {
-                .integer => |y| x == y,
-                .float => |y| @as(f64, @floatFromInt(x)) == y,
-                else => false,
-            };
-        },
-        .float => |x| {
-            return switch (b) {
-                .float => |y| x == y,
-                .integer => |y| x == @as(f64, @floatFromInt(y)),
-                else => false,
-            };
-        },
-        .string => |x| {
-            return switch (b) {
-                .string => |y| std.mem.eql(u8, x, y),
-                else => false,
-            };
-        },
-    }
+    return eqlLuaValue(a, b);
 }
 
 fn _lt(a: LuaValue, b: LuaValue) bool {
@@ -1586,7 +1624,98 @@ const VMInstuction = struct {
             try vm.copy(a, a + 3);
         }
     }
+
+    fn newTable(i: Instruction, vm: *LuaVM) !void {
+        const result = i.ABC();
+        const a = result[0] + 1;
+        const b = result[1];
+        const c = result[2];
+
+        try vm.createTable(fb2int(b), fb2int(c));
+        try vm.replace(a);
+    }
+
+    fn getTable(i: Instruction, vm: *LuaVM) !void {
+        const result = i.ABC();
+        const a = result[0] + 1;
+        const b = result[1] + 1;
+        const c = result[2];
+
+        try vm.getRK(c);
+        try vm.getTable(b);
+        try vm.replace(a);
+    }
+
+    fn setTable(i: Instruction, vm: *LuaVM) !void {
+        const result = i.ABC();
+        const a = result[0] + 1;
+        const b = result[1];
+        const c = result[2];
+
+        try vm.getRK(b);
+        try vm.getRK(c);
+        try vm.setTable(a);
+    }
+
+    fn setList(i: Instruction, vm: *LuaVM) !void {
+        const result = i.ABC();
+        const a = result[0] + 1;
+        const b = result[1];
+        var c = result[2];
+
+        if (c > 0) {
+            c = c - 1;
+        } else {
+            const inst = Instruction{ .data = vm.fetch() };
+            c = inst.Ax();
+        }
+
+        var idx: i64 = @as(i64, @intCast(c * LFIELDS_PER_FLUSH));
+        var j: isize = 1;
+        while (j <= b) : (j += 1) {
+            idx += 1;
+            try vm.pushValue(a + j);
+            try vm.setI(a, idx);
+        }
+    }
 };
+
+const LFIELDS_PER_FLUSH = 50;
+
+pub fn int2fb(_x: usize) usize {
+    var x = @as(isize, @intCast(_x));
+    var e: usize = 0;
+    if (x < 8) {
+        return x;
+    }
+
+    while (x >= (8 << 4)) {
+        x = (x + 0xf) >> 4;
+        e += 4;
+    }
+
+    while (x >= (8 << 1)) {
+        x = (x + 1) >> 1;
+        e += 1;
+    }
+
+    return ((e + 1) << 3) | (x - 8);
+}
+
+pub fn fb2int(_x: isize) usize {
+    var x = @as(usize, @intCast(_x));
+    if (x < 8) {
+        return x;
+    } else {
+        return ((x & 7) + 8) << @as(u6, @intCast((x >> 3) - 1));
+    }
+}
+
+test "fb2int, int2fb" {
+    const int: isize = 200;
+    const fb = int2fb(int);
+    try expect(int == fb2int(fb));
+}
 
 const LuaValueContext = struct {
     pub fn hash(self: @This(), l: LuaValue) u64 {
@@ -1691,18 +1820,21 @@ pub const LuaTable = struct {
 
     fn new(nArr: usize, nRec: usize, alloc: std.mem.Allocator) !*LuaTable {
         const n = @max(nArr, nRec);
-        var t = alloc.create(LuaTable);
-        t._map = try LuaValueHashMap(LuaValue).init(alloc);
-        try t._map.ensureTotalCapacity(n);
+        var t = try alloc.create(LuaTable);
+        t._map = LuaValueHashMap(LuaValue).init(alloc);
+        if (n > 0) {
+            try t._map.ensureTotalCapacity(@as(u32, @intCast(n)));
+        }
 
         return t;
     }
 
-    fn get(self: LuaTable, key: LuaValue) ?LuaValue {
-        return self._map.get(key);
+    fn get(self: *LuaTable, key: LuaValue) LuaValue {
+        const v = if (self._map.get(key)) |val| val else LuaValue{ .nil = {} };
+        return v;
     }
 
-    fn put(self: LuaTable, key: LuaValue, val: LuaValue) !void {
+    fn put(self: *LuaTable, key: LuaValue, val: LuaValue) !void {
         try self._map.put(key, val);
     }
 

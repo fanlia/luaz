@@ -174,6 +174,7 @@ fn constantToString(k: lib.Constant, alloc: std.mem.Allocator) ![]const u8 {
         .integer => |v| try std.fmt.allocPrint(alloc, "{d}", .{v}),
         .float => |v| try std.fmt.allocPrint(alloc, "{e}", .{v}),
         .string => |v| try std.fmt.allocPrint(alloc, "\"{s}\"", .{v}),
+        .table => "table",
     };
 }
 
