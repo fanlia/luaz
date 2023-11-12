@@ -1582,3 +1582,119 @@ const VMInstuction = struct {
         }
     }
 };
+
+const LuaValueContext = struct {
+    pub fn hash(self: @This(), l: LuaValue) u64 {
+        _ = self;
+        return hashLuaValue(l);
+    }
+    pub fn eql(self: @This(), a: LuaValue, b: LuaValue) bool {
+        _ = self;
+        return eqlLuaValue(a, b);
+    }
+};
+
+pub fn eqlLuaValue(a: LuaValue, b: LuaValue) bool {
+    return switch (a) {
+        .nil => {
+            return switch (b) {
+                .nil => true,
+                else => false,
+            };
+        },
+        .boolean => |x| {
+            return switch (b) {
+                .boolean => |y| x == y,
+                else => false,
+            };
+        },
+        .integer => |x| {
+            return switch (b) {
+                .integer => |y| x == y,
+                .float => |y| @as(f64, @floatFromInt(x)) == y,
+                else => false,
+            };
+        },
+        .float => |x| {
+            return switch (b) {
+                .float => |y| x == y,
+                .integer => |y| x == @as(f64, @floatFromInt(y)),
+                else => false,
+            };
+        },
+        .string => |x| {
+            return switch (b) {
+                .string => |y| std.mem.eql(u8, x, y),
+                else => false,
+            };
+        },
+    };
+}
+
+pub fn hashLuaValue(l: LuaValue) u64 {
+    return switch (l) {
+        .nil => std.hash.Wyhash.hash(0, "nil"),
+        .boolean => |b| std.hash.Wyhash.hash(0, std.mem.asBytes(&b)),
+        .integer => |i| std.hash.Wyhash.hash(0, std.mem.asBytes(&i)),
+        .float => |f| std.hash.Wyhash.hash(0, std.mem.asBytes(&f)),
+        .string => |s| std.hash.Wyhash.hash(0, s),
+    };
+}
+
+pub fn LuaValueHashMap(comptime T: type) type {
+    return std.HashMap(LuaValue, T, LuaValueContext, std.hash_map.default_max_load_percentage);
+}
+
+test "LuaValueHashMap" {
+    var map = LuaValueHashMap(LuaValue).init(std.testing.allocator);
+    defer map.deinit();
+
+    try map.put(LuaValue{ .nil = {} }, LuaValue{ .integer = 12 });
+    try map.put(LuaValue{ .boolean = true }, LuaValue{ .integer = 12 });
+    try map.put(LuaValue{ .integer = 12 }, LuaValue{ .integer = 12 });
+    try map.put(LuaValue{ .float = 12.34 }, LuaValue{ .integer = 12 });
+    try map.put(LuaValue{ .string = "ok" }, LuaValue{ .integer = 12 });
+
+    try map.put(LuaValue{ .string = "ok" }, LuaValue{ .integer = 13 });
+
+    if (map.get(LuaValue{ .nil = {} })) |v| {
+        try expect(eqlLuaValue(v, LuaValue{ .integer = 12 }));
+    }
+    if (map.get(LuaValue{ .boolean = true })) |v| {
+        try expect(eqlLuaValue(v, LuaValue{ .integer = 12 }));
+    }
+    if (map.get(LuaValue{ .integer = 12 })) |v| {
+        try expect(eqlLuaValue(v, LuaValue{ .integer = 12 }));
+    }
+    if (map.get(LuaValue{ .float = 12.34 })) |v| {
+        try expect(eqlLuaValue(v, LuaValue{ .integer = 12 }));
+    }
+    if (map.get(LuaValue{ .string = "ok" })) |v| {
+        try expect(eqlLuaValue(v, LuaValue{ .integer = 13 }));
+    }
+}
+
+const LuaTable = struct {
+    _map: LuaValueHashMap(LuaValue),
+
+    fn new(nArr: usize, nRec: usize, alloc: std.mem.Allocator) !*LuaTable {
+        const n = @max(nArr, nRec);
+        var t = alloc.create(LuaTable);
+        t._map = try LuaValueHashMap(LuaValue).init(alloc);
+        try t._map.ensureTotalCapacity(n);
+
+        return t;
+    }
+
+    fn get(self: LuaTable, key: LuaValue) ?LuaValue {
+        return self._map.get(key);
+    }
+
+    fn put(self: LuaTable, key: LuaValue, val: LuaValue) !void {
+        try self._map.put(key, val);
+    }
+
+    fn len(self: *LuaTable) usize {
+        return self._map.count();
+    }
+};
