@@ -1649,7 +1649,7 @@ pub fn hashLuaValue(l: LuaValue) u64 {
         .integer => |i| std.hash.Wyhash.hash(0, std.mem.asBytes(&i)),
         .float => |f| std.hash.Wyhash.hash(0, std.mem.asBytes(&f)),
         .string => |s| std.hash.Wyhash.hash(0, s),
-        .table => |t| std.hash.Wyhash.hash(0, std.mem.asBytes(&t)),
+        .table => |t| std.hash.Wyhash.hash(0, std.mem.asBytes(t)),
     };
 }
 
