@@ -525,6 +525,7 @@ pub const LuaValue = union(enum) {
     integer: i64,
     float: f64,
     string: []const u8,
+    table: *LuaTable,
 };
 
 fn typeOf(val: LuaValue) LuaType {
@@ -534,6 +535,7 @@ fn typeOf(val: LuaValue) LuaType {
         .integer => .LUA_TNUMBER,
         .float => .LUA_TNUMBER,
         .string => .LUA_TSTRING,
+        .table => .LUA_TTABLE,
     };
 }
 
@@ -866,6 +868,9 @@ pub const LuaState = struct {
         switch (val) {
             .string => |s| {
                 try self.stack.push(LuaValue{ .integer = @as(i64, @intCast(s.len)) });
+            },
+            .table => |t| {
+                try self.stack.push(LuaValue{ .integer = @as(i64, @intCast(t.len())) });
             },
             else => return error.LengthError,
         }
@@ -1628,6 +1633,12 @@ pub fn eqlLuaValue(a: LuaValue, b: LuaValue) bool {
                 else => false,
             };
         },
+        .table => |x| {
+            return switch (b) {
+                .table => |y| x == y,
+                else => false,
+            };
+        },
     };
 }
 
@@ -1638,6 +1649,7 @@ pub fn hashLuaValue(l: LuaValue) u64 {
         .integer => |i| std.hash.Wyhash.hash(0, std.mem.asBytes(&i)),
         .float => |f| std.hash.Wyhash.hash(0, std.mem.asBytes(&f)),
         .string => |s| std.hash.Wyhash.hash(0, s),
+        .table => |t| std.hash.Wyhash.hash(0, std.mem.asBytes(&t)),
     };
 }
 
@@ -1674,7 +1686,7 @@ test "LuaValueHashMap" {
     }
 }
 
-const LuaTable = struct {
+pub const LuaTable = struct {
     _map: LuaValueHashMap(LuaValue),
 
     fn new(nArr: usize, nRec: usize, alloc: std.mem.Allocator) !*LuaTable {
