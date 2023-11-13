@@ -445,6 +445,8 @@ const VMError = error{
     ArithmeticError,
     LengthError,
     NotATable,
+    TableIndexIsNil,
+    TableIndexIsNan,
 };
 
 const OpCode = struct {
@@ -527,6 +529,20 @@ pub const LuaValue = union(enum) {
     float: f64,
     string: []const u8,
     table: *LuaTable,
+
+    fn isNil(self: LuaValue) bool {
+        return switch (self) {
+            .nil => true,
+            else => false,
+        };
+    }
+
+    fn isNan(self: LuaValue) bool {
+        return switch (self) {
+            .float => |f| std.math.isNan(f),
+            else => false,
+        };
+    }
 };
 
 fn typeOf(val: LuaValue) LuaType {
@@ -1816,29 +1832,114 @@ test "LuaValueHashMap" {
 }
 
 pub const LuaTable = struct {
+    arr: std.ArrayList(LuaValue),
     _map: LuaValueHashMap(LuaValue),
 
     fn new(nArr: usize, nRec: usize, alloc: std.mem.Allocator) !*LuaTable {
-        const n = @max(nArr, nRec);
         var t = try alloc.create(LuaTable);
+        t.arr = std.ArrayList(LuaValue).init(alloc);
+        if (nArr > 0) {
+            try t.arr.ensureTotalCapacity(@as(u32, @intCast(nArr)));
+        }
         t._map = LuaValueHashMap(LuaValue).init(alloc);
-        if (n > 0) {
-            try t._map.ensureTotalCapacity(@as(u32, @intCast(n)));
+        if (nRec > 0) {
+            try t._map.ensureTotalCapacity(@as(u32, @intCast(nRec)));
         }
 
         return t;
     }
 
-    fn get(self: *LuaTable, key: LuaValue) LuaValue {
+    fn get(self: *LuaTable, _key: LuaValue) LuaValue {
+        const key = _floatToInteger(_key);
+        switch (key) {
+            .integer => |i| {
+                const idx = @as(usize, @intCast(i));
+                if (idx >= 1 and idx <= self.arr.items.len) {
+                    return self.arr.items[idx - 1];
+                }
+            },
+            else => {},
+        }
         const v = if (self._map.get(key)) |val| val else LuaValue{ .nil = {} };
         return v;
     }
 
-    fn put(self: *LuaTable, key: LuaValue, val: LuaValue) !void {
-        try self._map.put(key, val);
+    fn put(self: *LuaTable, _key: LuaValue, val: LuaValue) !void {
+        if (_key.isNil()) {
+            return error.TableIndexIsNil;
+        }
+        if (_key.isNan()) {
+            return error.TableIndexIsNan;
+        }
+        const key = _floatToInteger(_key);
+
+        switch (key) {
+            .integer => |i| {
+                const idx = @as(usize, @intCast(i));
+                if (idx >= 1) {
+                    const arrLen = self.arr.items.len;
+                    if (idx <= arrLen) {
+                        self.arr.items[idx - 1] = val;
+                        if (idx == arrLen and val.isNil()) {
+                            try self._shrinkArray();
+                        }
+                        return;
+                    }
+                    if (idx == arrLen + 1) {
+                        _ = self._map.remove(key);
+                        if (!val.isNil()) {
+                            try self.arr.append(val);
+                            try self._expandArray();
+                        }
+                    }
+                }
+            },
+            else => {},
+        }
+
+        if (!val.isNil()) {
+            try self._map.put(key, val);
+        } else {
+            _ = self._map.remove(key);
+        }
     }
 
     fn len(self: *LuaTable) usize {
-        return self._map.count();
+        return self.arr.items.len;
+    }
+
+    fn _shrinkArray(self: *LuaTable) !void {
+        var i: usize = self.arr.items.len - 1;
+        while (i >= 0) : (i -= 1) {
+            if (self.arr.items[i].isNil()) {
+                _ = self.arr.pop();
+            }
+        }
+    }
+
+    fn _expandArray(self: *LuaTable) !void {
+        var i: i64 = @as(i64, @intCast(self.arr.items.len)) + 1;
+        while (true) : (i += 1) {
+            const idx = LuaValue{ .integer = i };
+            if (self._map.get(idx)) |val| {
+                _ = self._map.remove(idx);
+                try self.arr.append(val);
+            } else {
+                break;
+            }
+        }
     }
 };
+
+fn _floatToInteger(key: LuaValue) LuaValue {
+    switch (key) {
+        .float => |f| {
+            const result = floatToInteger(f);
+            if (result[1]) {
+                return LuaValue{ .integer = result[0] };
+            }
+        },
+        else => {},
+    }
+    return key;
+}
